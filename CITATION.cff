@@ -1,0 +1,13 @@
+cff-version: 1.2.0
+title: >-
+  Scopus MCP
+message: 'If you use this software, please cite it as specified below.'
+type: software
+authors:
+  - given-names: Veronica
+    family-names: Valeros
+    email: valerver@fel.cvut.cz
+    affiliation: >-
+      Stratosphere Laboratory, AIC, FEL, Czech
+      Technical University in Prague
+    orcid: 'https://orcid.org/0000-0003-2554-3231'
