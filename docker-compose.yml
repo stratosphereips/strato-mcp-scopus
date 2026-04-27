@@ -1,0 +1,5 @@
+services:
+  scopus-mcp:
+    build: .
+    env_file:
+      - .env
