@@ -1,0 +1,41 @@
+name: Python Checks
+
+on:
+  workflow_run:
+    workflows: ["Auto Tag"]
+    types: [completed]
+    branches: [main]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'pull_request' }}
+    strategy:
+      matrix:
+        python-version: ["3.12", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: uv pip install --system -e ".[dev]"
+
+      - name: Install ruff
+        run: uv pip install --system ruff
+
+      - name: Lint with ruff
+        run: |
+          ruff check --output-format=github --select=E9,F63,F7,F82 .
+
+      - name: Test with pytest
+        run: uv run pytest
