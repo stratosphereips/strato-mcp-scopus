@@ -3,45 +3,94 @@ from __future__ import annotations
 
 from typing import Any
 
+from scopus_mcp.scopus.client import parse_citation_count
+
 
 def summarize_document(doc: dict[str, Any]) -> dict[str, Any]:
-    """Create a compact, agent-friendly summary of a Scopus document."""
-    entry = doc.get("entry", doc)
+    """Create a compact, agent-friendly summary of a Scopus document.
 
-    title = entry.get("dc:title")
+    Handles both response shapes:
+    - Search entries (STANDARD view): fields at the top level of the entry.
+    - Abstract retrieval (META/META_ABS view): fields nested under ``coredata``.
+    """
+    entry = doc.get("entry", doc) if isinstance(doc, dict) else doc
+    coredata = entry.get("coredata", {}) if isinstance(entry, dict) else {}
 
-    # STANDARD view returns dc:creator as a single primary-author string
-    authors = []
-    creator = entry.get("dc:creator")
-    if creator:
+    def pick(*keys: str) -> Any:
+        for key in keys:
+            if coredata.get(key) is not None:
+                return coredata[key]
+        for key in keys:
+            if entry.get(key) is not None:
+                return entry[key]
+        return None
+
+    title = pick("dc:title")
+
+    # STANDARD view returns dc:creator as a single primary-author string;
+    # META/META_ABS return a dict with an "author" list.
+    authors: list[str] = []
+    creator = pick("dc:creator")
+    if isinstance(creator, dict):
+        author_list = creator.get("author", [])
+        if isinstance(author_list, list):
+            for author in author_list:
+                if not isinstance(author, dict):
+                    continue
+                preferred = author.get("preferred-name") or {}
+                name = (
+                    author.get("ce:indexed-name")
+                    or preferred.get("ce:indexed-name")
+                    or " ".join(
+                        filter(
+                            None,
+                            [
+                                author.get("ce:given-name"),
+                                author.get("ce:surname"),
+                            ],
+                        )
+                    )
+                )
+                if name:
+                    authors.append(name)
+    elif creator:
         authors.append(str(creator))
 
-    journal = entry.get("prism:publicationName")
+    journal = pick("prism:publicationName")
 
     year = None
-    cover_date = entry.get("prism:coverDate")
+    cover_date = pick("prism:coverDate")
     if cover_date:
         year = str(cover_date)[:4]
 
-    doi = entry.get("prism:doi")
-    eid = entry.get("eid")
+    doi = pick("prism:doi")
+    eid = pick("eid")
 
-    citation_count = 0
-    try:
-        citation_count = int(entry.get("citedby-count", 0) or 0)
-    except (ValueError, TypeError):
-        pass
+    citation_count = parse_citation_count(
+        coredata.get("citation-count")
+        or coredata.get("citedby-count")
+        or entry.get("citation-count")
+        or entry.get("citedby-count")
+    )
 
-    # Abstract available in META_ABS / FULL views, not STANDARD
+    # Abstract available in META_ABS / FULL views, not STANDARD / META.
     abstract_snippet = None
-    abstract_raw = entry.get("dc:description") or entry.get("abstract")
+    abstract_raw = pick("dc:description")
+    if not abstract_raw:
+        item = entry.get("item") if isinstance(entry, dict) else None
+        bibrecord = item.get("bibrecord", {}) if isinstance(item, dict) else {}
+        head = bibrecord.get("head", {}) if isinstance(bibrecord, dict) else {}
+        abstract_raw = head.get("abstracts")
     if abstract_raw and isinstance(abstract_raw, str):
-        abstract_snippet = abstract_raw[:200] + "..." if len(abstract_raw) > 200 else abstract_raw
+        clean = abstract_raw.replace("<ce:para>", "\n").replace("</ce:para>", "")
+        abstract_snippet = clean[:200] + "..." if len(clean) > 200 else clean
 
-    # Links use @ref (not @rel) in Scopus search results
+    # Search results use @ref="self"; abstract retrieval uses @rel="self".
     link = None
-    for link_item in entry.get("link", []):
-        if isinstance(link_item, dict) and link_item.get("@ref") == "self":
+    for link_item in pick("link") or []:
+        if isinstance(link_item, dict) and (
+            link_item.get("@ref") == "self" or link_item.get("@rel") == "self"
+        ):
             link = link_item.get("@href")
             break
 
