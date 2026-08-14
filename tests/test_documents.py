@@ -85,6 +85,80 @@ class TestGetDocumentDetails:
         path = client.request_json.call_args[0][1]
         assert "/content/abstract/doi/" in path
 
+    def test_401_falls_back_to_meta_view(self, setup):
+        tools, client = setup
+        meta_response = {
+            "abstracts-retrieval-response": {
+                "coredata": {
+                    "dc:title": "Attention Is All You Need",
+                    "prism:doi": "10.48550/arXiv.1706.03762",
+                    "prism:publicationName": "Advances in Neural Information Processing Systems",
+                    "prism:coverDate": "2017-12-01",
+                    "citedby-count": "50000",
+                },
+            }
+        }
+        client.request_json.side_effect = [
+            ScopusApiError("Unauthorized", 401),
+            (meta_response, MagicMock()),
+        ]
+        result = tools["get_document_details"]("10.48550/arXiv.1706.03762")
+        assert result["title"] == "Attention Is All You Need"
+        assert result["abstract_available"] is False
+        assert result["abstract_snippet"] is None
+        assert result["citation_count"] == 50000
+
+    def test_401_fallback_retries_with_meta_view(self, setup):
+        tools, client = setup
+        client.request_json.side_effect = [
+            ScopusApiError("Unauthorized", 401),
+            (ABSTRACT_RETRIEVAL_RESPONSE, MagicMock()),
+        ]
+        tools["get_document_details"]("10.48550/arXiv.1706.03762")
+        assert client.request_json.call_count == 2
+        second_params = client.request_json.call_args_list[1][1]["params"]
+        assert second_params.get("view") == "META"
+
+    def test_403_also_triggers_fallback(self, setup):
+        tools, client = setup
+        meta_response = {
+            "abstracts-retrieval-response": {
+                "coredata": {
+                    "dc:title": "A Paper",
+                    "prism:doi": "10.1/test",
+                },
+            }
+        }
+        client.request_json.side_effect = [
+            ScopusApiError("Forbidden", 403),
+            (meta_response, MagicMock()),
+        ]
+        result = tools["get_document_details"]("10.1/test")
+        assert result["title"] == "A Paper"
+        assert result["abstract_available"] is False
+
+    def test_500_error_does_not_fall_back(self, setup):
+        tools, client = setup
+        client.request_json.side_effect = ScopusApiError("Server error", 500)
+        result = tools["get_document_details"]("10.1/bad")
+        assert "error" in result
+        assert client.request_json.call_count == 1
+
+    def test_401_fallback_error_when_meta_also_fails(self, setup):
+        tools, client = setup
+        client.request_json.side_effect = [
+            ScopusApiError("Unauthorized", 401),
+            ScopusApiError("Unauthorized", 401),
+        ]
+        result = tools["get_document_details"]("10.1/bad")
+        assert "error" in result
+
+    def test_abstract_available_true_on_meta_abs_success(self, setup):
+        tools, client = setup
+        client.request_json.return_value = (ABSTRACT_RETRIEVAL_RESPONSE, MagicMock())
+        result = tools["get_document_details"]("10.48550/arXiv.1706.03762")
+        assert result["abstract_available"] is True
+
 
 # ---------------------------------------------------------------------------
 # find_similar_documents

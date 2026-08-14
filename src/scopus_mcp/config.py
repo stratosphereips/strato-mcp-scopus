@@ -23,6 +23,7 @@ class Config:
     api_key: str
     api_base_url: str = DEFAULT_API_BASE_URL
     content_key: str | None = None
+    inst_token: str | None = None
     default_limit: int = DEFAULT_LIMIT
     log_level: str = "WARNING"
 
@@ -79,6 +80,7 @@ def load_config() -> Config:
         api_key=api_key,
         api_base_url=os.getenv("SCOPUS_API_BASE_URL", DEFAULT_API_BASE_URL),
         content_key=os.getenv("SCOPUS_CONTENT_KEY") or None,
+        inst_token=os.getenv("SCOPUS_INSTTOKEN") or None,
         default_limit=default_limit,
         log_level=os.getenv("LOG_LEVEL", "WARNING"),
     )

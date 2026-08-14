@@ -4,10 +4,55 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from scopus_mcp.scopus.client import ScopusApiError
 from scopus_mcp.tools import _resolve_id_field, _tool_annotations, summarize_document
 from scopus_mcp.tools.discovery import _search_topic
 
 logger = logging.getLogger(__name__)
+
+
+def _get_document_metadata_fallback(
+    client: Any,
+    identifier: str,
+    identifier_type: str,
+    path: str,
+) -> dict[str, Any]:
+    """Retry an abstract-retrieval request with the metadata-only META view.
+
+    Some API keys lack the entitlement required for the META_ABS view (which
+    returns abstracts) and receive 401/403 instead. In that case we fall back to
+    the META view, which returns the same metadata minus the abstract, so the
+    tool still yields title, authors, journal, and citation count.
+    """
+    try:
+        result, _ = client.request_json("GET", path, params={"view": "META"})
+    except ScopusApiError as exc:
+        logger.debug("META fallback failed for %r: %s", identifier, exc)
+        return {
+            "identifier": identifier,
+            "identifier_type": identifier_type,
+            "error": str(exc),
+        }
+
+    if result is None:
+        return {
+            "identifier": identifier,
+            "identifier_type": identifier_type,
+            "error": "Document not found",
+        }
+
+    abstract_doc = result.get("abstracts-retrieval-response", {})
+    if not abstract_doc:
+        return {
+            "identifier": identifier,
+            "identifier_type": identifier_type,
+            "error": "Invalid response structure",
+        }
+
+    summary = summarize_document(abstract_doc)
+    summary["abstract_snippet"] = None
+    summary["abstract_available"] = False
+    return summary
 
 
 def register_document_tools(mcp: Any, get_client: Any) -> None:
@@ -39,11 +84,12 @@ def register_document_tools(mcp: Any, get_client: Any) -> None:
         """
         client = get_client()
         id_field = _resolve_id_field(identifier_type)
+        path = f"/content/abstract/{id_field}/{identifier}"
 
         try:
             result, _ = client.request_json(
                 "GET",
-                f"/content/abstract/{id_field}/{identifier}",
+                path,
                 params={"view": "META_ABS"},
             )
 
@@ -62,7 +108,21 @@ def register_document_tools(mcp: Any, get_client: Any) -> None:
                     "error": "Invalid response structure",
                 }
 
-            return summarize_document(abstract_doc)
+            summary = summarize_document(abstract_doc)
+            summary["abstract_available"] = summary.get("abstract_snippet") is not None
+            return summary
+
+        except ScopusApiError as exc:
+            if exc.status_code in (401, 403):
+                return _get_document_metadata_fallback(
+                    client, identifier, identifier_type, path
+                )
+            logger.debug("get_document_details failed for %r", identifier, exc_info=True)
+            return {
+                "identifier": identifier,
+                "identifier_type": identifier_type,
+                "error": str(exc),
+            }
 
         except Exception as exc:
             logger.debug("get_document_details failed for %r", identifier, exc_info=True)

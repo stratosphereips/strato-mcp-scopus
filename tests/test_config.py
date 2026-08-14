@@ -10,6 +10,7 @@ def test_config_defaults():
     assert config.api_key == "test_key"
     assert config.api_base_url == "https://api.elsevier.com"
     assert config.content_key is None
+    assert config.inst_token is None
     assert config.default_limit == 25
 
 
@@ -19,11 +20,13 @@ def test_config_custom_values():
         api_key="test_key",
         api_base_url="https://custom.api.com",
         content_key="content_key",
+        inst_token="inst_token",
         default_limit=50,
     )
 
     assert config.api_base_url == "https://custom.api.com"
     assert config.content_key == "content_key"
+    assert config.inst_token == "inst_token"
     assert config.default_limit == 50
 
 

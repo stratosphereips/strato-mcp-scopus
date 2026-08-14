@@ -3,7 +3,8 @@ from __future__ import annotations
 
 import pytest
 
-from scopus_mcp.scopus.client import parse_citation_count
+from scopus_mcp.config import Config
+from scopus_mcp.scopus.client import parse_citation_count, ScopusClient
 
 
 class TestParseCitationCount:
@@ -46,3 +47,15 @@ class TestParseCitationCount:
 
     def test_zero_string(self):
         assert parse_citation_count("0") == 0
+
+
+class TestScopusClientHeaders:
+    """ScopusClient must attach entitlement headers only when configured."""
+
+    def test_insttoken_header_added_when_configured(self):
+        client = ScopusClient(Config(api_key="k", inst_token="tok"))
+        assert client._base_headers["X-ELS-Insttoken"] == "tok"
+
+    def test_insttoken_header_absent_when_not_configured(self):
+        client = ScopusClient(Config(api_key="k"))
+        assert "X-ELS-Insttoken" not in client._base_headers

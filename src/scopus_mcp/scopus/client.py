@@ -69,6 +69,8 @@ class ScopusClient:
         }
         if config.content_key:
             self._base_headers["X-ELS-ContentKey"] = config.content_key
+        if config.inst_token:
+            self._base_headers["X-ELS-Insttoken"] = config.inst_token
 
         self._http = http_client or httpx.Client(
             base_url=config.api_base_url,
