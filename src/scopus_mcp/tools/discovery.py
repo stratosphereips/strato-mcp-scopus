@@ -162,7 +162,9 @@ def register_discovery_tools(mcp: Any, get_client: Any) -> None:
         if year:
             if "-" in year:
                 start, end = year.split("-", 1)
-                query_parts.append(f"PUBYEAR >= {start} AND PUBYEAR <= {end}")
+                query_parts.append(
+                    f"PUBYEAR > {int(start) - 1} AND PUBYEAR < {int(end) + 1}"
+                )
             else:
                 query_parts.append(f"PUBYEAR = {year}")
         if doc_type:

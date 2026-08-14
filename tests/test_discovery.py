@@ -148,8 +148,8 @@ class TestAdvancedSearch:
         tools, client = tools_and_client
         tools["advanced_search"](keywords="test", year="2020-2024")
         params = client.request_json.call_args[1]["params"]
-        assert "PUBYEAR >= 2020" in params["query"]
-        assert "PUBYEAR <= 2024" in params["query"]
+        assert "PUBYEAR > 2019" in params["query"]
+        assert "PUBYEAR < 2025" in params["query"]
 
     def test_doc_type_filter(self, tools_and_client):
         tools, client = tools_and_client
