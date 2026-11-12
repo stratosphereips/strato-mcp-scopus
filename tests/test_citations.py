@@ -112,16 +112,15 @@ class TestGetCitationNetwork:
 # get_citation_metrics
 # ---------------------------------------------------------------------------
 
-# Citation metrics uses a different endpoint (/ws/rest/abstract/scopus/...) where
-# citation-count is a list of {"$": "N"} dicts, matching ABSTRACT_RETRIEVAL_RESPONSE's
-# coredata structure.
+# Citation metrics reads the Abstract Retrieval META view, whose coredata gives the
+# citation count as citedby-count, a plain string.
 
 def _metrics_response(count: int, title: str) -> dict:
     return {
         "abstracts-retrieval-response": {
             "coredata": {
-                "citation-count": [{"$": str(count)}],
-                "dc:title": [{"$": title}],
+                "citedby-count": str(count),
+                "dc:title": title,
             }
         }
     }
@@ -144,14 +143,23 @@ class TestGetCitationMetrics:
         assert result["metrics"][0]["citation_count"] == 100
         assert result["metrics"][1]["citation_count"] == 10
 
-    def test_uses_ws_rest_endpoint(self, setup):
+    def test_uses_abstract_retrieval_meta_view(self, setup):
+        """/ws/rest/abstract/scopus/... does not exist (HTTP 404)."""
         tools, client = setup
         client.request_json.return_value = (_metrics_response(5, "Test"), MagicMock())
         tools["get_citation_metrics"](["10.1/test"])
         path = client.request_json.call_args[0][1]
-        assert "/ws/rest/abstract/scopus/" in path
+        assert path == "/content/abstract/doi/10.1/test"
+        assert client.request_json.call_args[1]["params"] == {"view": "META"}
 
-    def test_skips_failed_lookups_silently(self, setup):
+    def test_reads_citedby_count_and_title(self, setup):
+        tools, client = setup
+        client.request_json.return_value = (_metrics_response(497, "Bias against novelty"), MagicMock())
+        result = tools["get_citation_metrics"](["10.1/test"])
+        assert result["metrics"][0]["citation_count"] == 497
+        assert result["metrics"][0]["title"] == "Bias against novelty"
+
+    def test_reports_failed_lookups(self, setup):
         tools, client = setup
         client.request_json.side_effect = [
             ScopusApiError("Not found", 404),
@@ -160,6 +168,7 @@ class TestGetCitationMetrics:
         result = tools["get_citation_metrics"](["10.1/bad", "10.1/good"])
         assert len(result["metrics"]) == 1
         assert result["metrics"][0]["citation_count"] == 5
+        assert [e["identifier"] for e in result["errors"]] == ["10.1/bad"]
 
     def test_none_response_skipped(self, setup):
         tools, client = setup

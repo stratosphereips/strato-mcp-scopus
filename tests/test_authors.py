@@ -24,15 +24,17 @@ def setup():
 
 
 def _entry_with_author(name: str, auid: str, citations: str = "10") -> dict:
-    """Build a search entry carrying a single authoreference."""
+    """Build a COMPLETE-view search entry with a single author and their affiliation."""
     return {
         **SEARCH_ENTRY,
         "citedby-count": citations,
-        "authoreference": [
+        "affiliation": [{"afid": "60000001", "affilname": "Test University"}],
+        "author": [
             {
-                "ce:indexed-name": name,
-                "@auid": auid,
-                "affiliation": [{"affiliation-name": {"#text": "Test University"}}],
+                "@seq": "1",
+                "authid": auid,
+                "authname": name,
+                "afid": [{"$": "60000001"}],
             }
         ],
     }
@@ -133,6 +135,47 @@ class TestFindExpertsIn:
         assert "error" in result
         assert result["experts"] == []
 
+    def test_requests_complete_view_in_pages_of_at_most_25(self, setup):
+        """STANDARD entries carry no author list; Scopus rejects count > 25 with HTTP 400."""
+        tools, client = setup
+        page = {
+            "search-results": {
+                "opensearch:totalResults": "100",
+                "entry": [_entry_with_author(f"A{i}", f"auth-{i}") for i in range(25)],
+            }
+        }
+        client.request_json.return_value = (page, MagicMock())
+        tools["find_experts_in"]("test", limit=5)  # wants 50 entries: two pages
+        calls = client.request_json.call_args_list
+        assert len(calls) == 2
+        assert all(c[1]["params"]["view"] == "COMPLETE" for c in calls)
+        assert all(c[1]["params"]["count"] <= 25 for c in calls)
+        assert [c[1]["params"]["start"] for c in calls] == [0, 25]
+
+    def test_affiliation_resolved_from_entry_affiliations(self, setup):
+        tools, client = setup
+        response = {
+            "search-results": {
+                "opensearch:totalResults": "1",
+                "entry": [_entry_with_author("Smith J.", "auth-001")],
+            }
+        }
+        client.request_json.return_value = (response, MagicMock())
+        result = tools["find_experts_in"]("test")
+        assert result["experts"][0]["affiliation"] == "Test University"
+
+    def test_empty_result_error_entry_ignored(self, setup):
+        tools, client = setup
+        response = {
+            "search-results": {
+                "opensearch:totalResults": "0",
+                "entry": [{"@_fa": "true", "error": "Result set was empty"}],
+            }
+        }
+        client.request_json.return_value = (response, MagicMock())
+        result = tools["find_experts_in"]("test")
+        assert result["experts"] == []
+
 
 # ---------------------------------------------------------------------------
 # search_author
@@ -207,12 +250,35 @@ class TestGetAuthorProfile:
         path = client.request_json.call_args[0][1]
         assert path == "/content/author/author_id/35590507000"
 
-    def test_requests_complete_view(self, setup):
+    def test_requests_enhanced_view(self, setup):
+        """Author Retrieval has no COMPLETE view (HTTP 400); ENHANCED carries the h-index."""
         tools, client = setup
         client.request_json.return_value = (AUTHOR_PROFILE_RESPONSE, MagicMock())
         tools["get_author_profile"]("35590507000")
         params = client.request_json.call_args[1]["params"]
-        assert params.get("view") == "COMPLETE"
+        assert params.get("view") == "ENHANCED"
+
+    def test_reads_affiliation_and_author_id(self, setup):
+        tools, client = setup
+        client.request_json.return_value = (AUTHOR_PROFILE_RESPONSE, MagicMock())
+        result = tools["get_author_profile"]("35590507000")
+        assert result["affiliation"] == "University of Toronto"
+        assert result["author_id"] == "35590507000"
+        assert result["citation_count"] == 150000
+
+    def test_include_publications_searches_author_documents(self, setup):
+        tools, client = setup
+        client.request_json.side_effect = [
+            (AUTHOR_PROFILE_RESPONSE, MagicMock()),
+            (SEARCH_RESPONSE, MagicMock()),
+        ]
+        result = tools["get_author_profile"]("35590507000", include_publications=True)
+        path = client.request_json.call_args_list[1][0][1]
+        params = client.request_json.call_args_list[1][1]["params"]
+        assert path == "/content/search/scopus"
+        assert params["query"] == "AU-ID(35590507000)"
+        assert params["count"] <= 25
+        assert len(result["recent_publications"]) == 1
 
     def test_none_response_returns_error(self, setup):
         tools, client = setup
