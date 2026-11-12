@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import pytest
 
+from scopus_mcp.tools.authors import _author_retrieval_profile
 from scopus_mcp.tools.schema import summarize_author, summarize_document
 from tests.conftest import (
     ABSTRACT_RETRIEVAL_RESPONSE,
@@ -146,10 +147,14 @@ class TestSummarizeAuthorFromSearchEntry:
 
 
 class TestSummarizeAuthorFromProfileResponse:
-    """summarize_author with a /content/author/author_id/{id} COMPLETE response body."""
+    """summarize_author with a /content/author/author_id/{id} ENHANCED response body,
+    reshaped by _author_retrieval_profile as get_author_profile does."""
 
     def setup_method(self):
-        self.profile = AUTHOR_PROFILE_RESPONSE["author-profile"]
+        self.profile = _author_retrieval_profile(AUTHOR_PROFILE_RESPONSE)
+
+    def test_affiliation(self):
+        assert summarize_author(self.profile)["affiliation"] == "University of Toronto"
 
     def test_full_name(self):
         assert summarize_author(self.profile)["name"] == "Geoffrey Hinton"

@@ -116,18 +116,33 @@ AUTHOR_SEARCH_RESPONSE = {
     }
 }
 
-# Author profile as returned by /content/author/author_id/{id} (COMPLETE view).
+# Author profile as returned by /content/author/author_id/{id} (ENHANCED view): the record is
+# wrapped in a one-element list; coredata and h-index sit next to author-profile, and the current
+# affiliation's name is in affiliation-current.affiliation.ip-doc.
 AUTHOR_PROFILE_RESPONSE = {
-    "author-profile": {
-        "preferred-name": {"given-name": "Geoffrey", "surname": "Hinton"},
-        "affiliation-current": {"affiliation-name": "University of Toronto"},
-        "coredata": {
-            "citation-count": "150000",
+    "author-retrieval-response": [
+        {
+            "@status": "found",
+            "coredata": {
+                "citation-count": "150000",
+                "document-count": "250",
+                "dc:identifier": "AUTHOR_ID:35590507000",
+            },
             "h-index": "120",
-            "document-count": "250",
-            "dc:identifier": "AUTHOR_ID:35590507000",
-        },
-    }
+            "author-profile": {
+                "preferred-name": {"given-name": "Geoffrey", "surname": "Hinton"},
+                "affiliation-current": {
+                    "affiliation": {
+                        "@affiliation-id": "60016849",
+                        "ip-doc": {
+                            "@afdispname": "University of Toronto",
+                            "preferred-name": {"$": "University of Toronto"},
+                        },
+                    }
+                },
+            },
+        }
+    ]
 }
 
 

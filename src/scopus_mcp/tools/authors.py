@@ -16,6 +16,49 @@ from scopus_mcp.tools import (
 logger = logging.getLogger(__name__)
 
 
+def _as_list(value: Any) -> list[Any]:
+    """Scopus JSON gives a one-element list as a bare object: always return a list."""
+    if value is None:
+        return []
+    return value if isinstance(value, list) else [value]
+
+
+def _author_retrieval_profile(result: dict[str, Any]) -> dict[str, Any]:
+    """Reshape an Author Retrieval response into the structure summarize_author reads.
+
+    The API wraps the record as ``{"author-retrieval-response": [entry]}``. In the entry,
+    ``coredata`` and ``h-index`` sit next to ``author-profile``, not inside it, and the current
+    affiliation's name is in ``affiliation-current.affiliation[].ip-doc`` (``@afdispname`` or
+    ``preferred-name.$``).
+    """
+    entry: Any = result.get("author-retrieval-response", result)
+    if isinstance(entry, list):
+        entry = entry[0] if entry else {}
+    if not isinstance(entry, dict):
+        entry = {}
+
+    profile = dict(entry.get("author-profile") or {})
+    coredata = dict(entry.get("coredata") or profile.get("coredata") or {})
+    if entry.get("h-index") is not None:
+        coredata.setdefault("h-index", entry["h-index"])
+    profile["coredata"] = coredata
+
+    current = profile.get("affiliation-current")
+    if isinstance(current, dict) and "affiliation" in current:
+        name = None
+        for aff in _as_list(current["affiliation"]):
+            doc = (aff.get("ip-doc") or {}) if isinstance(aff, dict) else {}
+            preferred = doc.get("preferred-name")
+            name = doc.get("@afdispname") or doc.get("afdispname") or (
+                preferred.get("$") if isinstance(preferred, dict) else preferred
+            )
+            if name:
+                break
+        profile["affiliation-current"] = {"affiliation-name": name}
+
+    return {"author-profile": profile}
+
+
 def register_author_tools(mcp: Any, get_client: Any) -> None:
     """Register author-focused Scopus tools."""
 
@@ -60,48 +103,63 @@ def register_author_tools(mcp: Any, get_client: Any) -> None:
         query = " AND ".join(query_parts)
 
         try:
-            result, _ = client.request_json(
-                "GET",
-                "/content/search/scopus",
-                params={
-                    "query": query,
-                    "count": min(limit * 10, 100),
-                    "view": "STANDARD",
-                    "sort": "citedby-count",
-                },
-            )
+            # Only the COMPLETE view lists every author of a result (STANDARD carries just
+            # dc:creator), and the API returns at most 25 entries per page.
+            wanted = min(limit * 10, 100)
+            entries: list[dict[str, Any]] = []
+            while len(entries) < wanted:
+                result, _ = client.request_json(
+                    "GET",
+                    "/content/search/scopus",
+                    params={
+                        "query": query,
+                        "start": len(entries),
+                        "count": min(25, wanted - len(entries)),
+                        "view": "COMPLETE",
+                        "sort": "citedby-count",
+                    },
+                )
+                if result is None:
+                    break
+                page = result.get("search-results", {}).get("entry", [])
+                # An empty result set comes back as one entry that only carries an "error" key.
+                page = [e for e in page if isinstance(e, dict) and "error" not in e]
+                entries.extend(page)
+                total = int(result.get("search-results", {}).get("opensearch:totalResults", 0) or 0)
+                if not page or len(entries) >= total:
+                    break
 
-            if result is None:
-                return {"topic": topic, "field": field, "experts": []}
-
-            entries = result.get("search-results", {}).get("entry", [])
             author_stats: dict[str, dict[str, Any]] = {}
 
-            for entry in entries[:50]:
+            for entry in entries:
                 # Search results return citedby-count as a plain string.
                 citations = parse_citation_count(entry.get("citedby-count"))
+                affiliation_names = {
+                    aff.get("afid"): aff.get("affilname")
+                    for aff in _as_list(entry.get("affiliation"))
+                    if isinstance(aff, dict)
+                }
 
-                for author in entry.get("authoreference", [])[:5]:
+                for author in _as_list(entry.get("author"))[:5]:
                     if not isinstance(author, dict):
                         continue
 
-                    author_id = author.get("@auid")
+                    author_id = author.get("authid")
                     if not author_id:
                         continue
 
-                    author_name = author.get("ce:indexed-name") or author.get("dc:creator")
+                    author_name = author.get("authname") or " ".join(
+                        part for part in (author.get("given-name"), author.get("surname")) if part
+                    )
                     if not author_name:
                         continue
 
                     affiliation: str | None = None
-                    for aff in author.get("affiliation", []):
-                        if isinstance(aff, dict):
-                            affiliation = (
-                                aff.get("affiliation-name", {}).get("#text")
-                                or aff.get("affilname")
-                            )
-                            if affiliation:
-                                break
+                    for afid in _as_list(author.get("afid")):
+                        name = affiliation_names.get(afid.get("$") if isinstance(afid, dict) else afid)
+                        if name:
+                            affiliation = name
+                            break
 
                     if author_id not in author_stats:
                         author_stats[author_id] = {
@@ -215,22 +273,35 @@ def register_author_tools(mcp: Any, get_client: Any) -> None:
         client = get_client()
 
         try:
+            # Author Retrieval accepts LIGHT, STANDARD and ENHANCED; ENHANCED adds the h-index.
             result, _ = client.request_json(
                 "GET",
                 f"/content/author/author_id/{author_id}",
-                params={"view": "COMPLETE"},
+                params={"view": "ENHANCED"},
             )
 
             if result is None:
                 return {"author_id": author_id, "error": "Author not found"}
 
-            profile_data = result.get("author-profile", {})
-            summary = summarize_author(profile_data)
+            summary = summarize_author(_author_retrieval_profile(result))
 
             if include_publications:
-                documents = profile_data.get("data", {}).get("document", [])
+                # Author Retrieval carries no document list: search the author's documents.
+                docs, _ = client.request_json(
+                    "GET",
+                    "/content/search/scopus",
+                    params={
+                        "query": f"AU-ID({author_id})",
+                        "count": max(1, min(publication_limit, 25)),
+                        "sort": "-coverDate",
+                        "view": "STANDARD",
+                    },
+                )
+                entries = (docs or {}).get("search-results", {}).get("entry", [])
                 summary["recent_publications"] = [
-                    summarize_document(doc) for doc in documents[:publication_limit]
+                    summarize_document(doc)
+                    for doc in entries[:publication_limit]
+                    if isinstance(doc, dict) and "error" not in doc
                 ]
 
             return summary

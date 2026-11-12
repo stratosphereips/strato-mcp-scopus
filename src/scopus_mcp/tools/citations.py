@@ -127,19 +127,24 @@ def register_citation_tools(mcp: Any, get_client: Any) -> None:
         id_field = _resolve_id_field(identifier_type)
 
         metrics: list[dict[str, Any]] = []
+        errors: list[dict[str, str]] = []
 
         for ident in identifiers:
             try:
                 result, _ = client.request_json(
                     "GET",
-                    f"/ws/rest/abstract/scopus/{id_field}/{ident}",
+                    f"/content/abstract/{id_field}/{ident}",
                     params={"view": "META"},
                 )
                 if result is None:
+                    errors.append({"identifier": ident, "error": "Document not found"})
                     continue
 
                 coredata = result.get("abstracts-retrieval-response", {}).get("coredata", {})
-                citation_count = parse_citation_count(coredata.get("citation-count"))
+                # The META view gives citedby-count as a plain string.
+                citation_count = parse_citation_count(
+                    coredata.get("citedby-count", coredata.get("citation-count"))
+                )
 
                 # dc:title can be a plain string or a list of {"$": "..."} dicts
                 raw_title = coredata.get("dc:title")
@@ -159,8 +164,12 @@ def register_citation_tools(mcp: Any, get_client: Any) -> None:
                     {"identifier": ident, "title": title, "citation_count": citation_count}
                 )
 
-            except Exception:
+            except Exception as exc:
                 logger.debug("get_citation_metrics failed for %r", ident, exc_info=True)
+                errors.append({"identifier": ident, "error": str(exc)})
 
         metrics.sort(key=lambda x: x.get("citation_count", 0), reverse=True)
-        return {"identifiers": identifiers, "metrics": metrics}
+        response: dict[str, Any] = {"identifiers": identifiers, "metrics": metrics}
+        if errors:
+            response["errors"] = errors
+        return response
